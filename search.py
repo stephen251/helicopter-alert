@@ -1,19 +1,28 @@
-import time
+import os
 import requests
 from geopy.distance import geodesic
-import subprocess
 
 HOME_LAT = 55.611
 HOME_LON = -4.495
 RADIUS_MILES = 3
-CHECK_EVERY_SECONDS = 30
 
-seen = set()
+BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 def get_bbox(lat, lon, miles):
     delta_lat = miles / 69
     delta_lon = miles / (69 * 0.57)
     return lat - delta_lat, lon - delta_lon, lat + delta_lat, lon + delta_lon
+
+def send_alert(message):
+    requests.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+        json={
+            "chat_id": CHAT_ID,
+            "text": message
+        },
+        timeout=10
+    )
 
 def get_aircraft():
     lamin, lomin, lamax, lomax = get_bbox(HOME_LAT, HOME_LON, RADIUS_MILES)
@@ -26,43 +35,23 @@ def get_aircraft():
         "lomax": lomax
     }
 
-    r = requests.get(url, params=params, timeout=5)
+    r = requests.get(url, params=params, timeout=10)
     r.raise_for_status()
 
-    data = r.json()
-    return data.get("states") or []
+    return r.json().get("states") or []
 
-def send_alert(callsign, icao24, distance):
-    message = f"{callsign} — {distance:.1f} miles away"
+aircraft = get_aircraft()
 
-    print(message, flush=True)
+for state in aircraft:
+    icao24 = state[0]
+    callsign = state[1].strip() if state[1] else "Unknown"
+    lon = state[5]
+    lat = state[6]
 
-    subprocess.run([
-        "osascript",
-        "-e",
-        f'display notification "{message}" with title "Aircraft nearby"'
-    ])
+    if lat is None or lon is None:
+        continue
 
-while True:
-    try:
-        aircraft = get_aircraft()
+    distance = geodesic((HOME_LAT, HOME_LON), (lat, lon)).miles
 
-        for state in aircraft:
-            icao24 = state[0]
-            callsign = state[1].strip() if state[1] else "Unknown"
-            lon = state[5]
-            lat = state[6]
-
-            if lat is None or lon is None:
-                continue
-
-            distance = geodesic((HOME_LAT, HOME_LON), (lat, lon)).miles
-
-            if distance <= RADIUS_MILES and icao24 not in seen:
-                send_alert(callsign, icao24, distance)
-                seen.add(icao24)
-
-    except Exception as e:
-        print(f"Error: {e}", flush=True)
-
-    time.sleep(CHECK_EVERY_SECONDS)
+    if distance <= RADIUS_MILES:
+        send_alert(f"Aircraft nearby: {callsign} ({distance:.1f} miles)")
