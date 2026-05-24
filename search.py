@@ -15,14 +15,15 @@ def get_bbox(lat, lon, miles):
     return lat - delta_lat, lon - delta_lon, lat + delta_lat, lon + delta_lon
 
 def send_alert(message):
-    requests.post(
+    response = requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
         json={
             "chat_id": CHAT_ID,
             "text": message
         },
-        timeout=10
+        timeout=30
     )
+    response.raise_for_status()
 
 def get_aircraft():
     lamin, lomin, lamax, lomax = get_bbox(HOME_LAT, HOME_LON, RADIUS_MILES)
@@ -35,23 +36,36 @@ def get_aircraft():
         "lomax": lomax
     }
 
-    r = requests.get(url, params=params, timeout=10)
-    r.raise_for_status()
+    response = requests.get(url, params=params, timeout=30)
+    response.raise_for_status()
 
-    return r.json().get("states") or []
+    data = response.json()
+    return data.get("states") or []
 
-aircraft = get_aircraft()
+def main():
+    try:
+        aircraft = get_aircraft()
+    except requests.exceptions.RequestException as e:
+        print(f"OpenSky request failed: {e}")
+        return
 
-for state in aircraft:
-    icao24 = state[0]
-    callsign = state[1].strip() if state[1] else "Unknown"
-    lon = state[5]
-    lat = state[6]
+    print(f"Aircraft found: {len(aircraft)}")
 
-    if lat is None or lon is None:
-        continue
+    for state in aircraft:
+        icao24 = state[0]
+        callsign = state[1].strip() if state[1] else "Unknown"
+        lon = state[5]
+        lat = state[6]
 
-    distance = geodesic((HOME_LAT, HOME_LON), (lat, lon)).miles
+        if lat is None or lon is None:
+            continue
 
-    if distance <= RADIUS_MILES:
-        send_alert(f"Aircraft nearby: {callsign} ({distance:.1f} miles)")
+        distance = geodesic((HOME_LAT, HOME_LON), (lat, lon)).miles
+
+        if distance <= RADIUS_MILES:
+            message = f"Aircraft nearby: {callsign} / {icao24} — {distance:.1f} miles"
+            print(message)
+            send_alert(message)
+
+if __name__ == "__main__":
+    main()
